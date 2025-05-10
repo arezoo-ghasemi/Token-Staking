@@ -1,93 +1,110 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.22;
+pragma solidity 0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./TokenS.sol";
-import "./TokenC.sol";
 
-contract Staking {
-    address tokenS;
-    address tokenC;
-    uint pureProfit = 3*1e13;
-    uint numholder;
-    uint totalStaking;
-    uint lastTime;
-    uint profitPertoken;
-    struct stake{
-        uint totalProfit;
-        uint amount; 
-        uint giveProfit; 
-        uint rewardperToken; 
-        bool first;    
-    }
-    mapping (address => stake) staking;
+contract Staking{
 
-    constructor(address TS, address TC){
-        tokenS = TS;
-        tokenC = TC;
+    address owner;
+    address stakeToken;
+    address rewardToken;
+    uint  rewardRate = 3*10**13;
+    uint lastUpdateTime;
+    uint totalStakeToken;
+    uint activeStakerCount;
+    uint profitPerToken;
+
+    struct staker{
+        uint balanceStaker;
+        uint userRewardPerToken;
+        uint profit;
+        uint withrowProfit;
     }
 
-    function stakeT(uint amount) public {
-        updateProfit(msg.sender);
-        staking[msg.sender].amount += amount; 
-        totalStaking += amount;
-        if(!staking[msg.sender].first) {
-            staking[msg.sender].first = true;
-            numholder++;
-        }
-        bool r = IERC20(tokenS).transferFrom(msg.sender, address(this), amount); 
-        require(r,"transfer faild");           
+    mapping(address=>staker) stakerInfo;
+
+    constructor(address st, address rt){
+        stakeToken = st;
+        rewardToken = rt;
     }
 
-    function calcProfit() public {
-        if(totalStaking!=0){
-            profitPertoken = (block.timestamp - lastTime)*pureProfit*1e18/totalStaking;
-        }
-    }
-
-    function updateProfit(address s) public {
-        calcProfit();
-        lastTime = block.timestamp;
-        staking[s].totalProfit += earn(s);
-        staking[s].rewardperToken;
-
-    }
-
-    function earn(address s) public view returns(uint){
-        return (staking[s].amount*(staking[s].rewardperToken-profitPertoken))/1e18;
-
-    }
-
-    modifier checkBalance(uint amount, address s){
-        require(amount <= staking[s].amount,"yout balance not enough");
+    //update and calc reward
+    modifier  updateReward(address user){
+        profitPerToken = calcProfit();
+        lastUpdateTime = block.timestamp;
+        stakerInfo[user].profit = earn(user);
+        stakerInfo[user].userRewardPerToken= profitPerToken;
         _;
     }
 
-    function witdrow(uint amount) public checkBalance(amount, msg.sender){
-        updateProfit(msg.sender);
-        staking[msg.sender].amount -= amount;
-        totalStaking -= amount;
-        if(staking[msg.sender].amount == 0){
-            numholder--;
+    function calcProfit() public view returns(uint){
+        if(totalStakeToken==0){
+            return 0;
+        }else{
+            return profitPerToken + ((block.timestamp-lastUpdateTime)*rewardRate*1e18/totalStakeToken);
         }
-        bool r = IERC20(tokenS).transfer(msg.sender, amount);
-        require(r,"the transfer faild");
 
     }
 
-    modifier checkRewardBalance(uint amount, address s){
-        require(amount <= staking[s].totalProfit,"the amount there is not");
+    function earn(address user) public view returns (uint){
+        return (stakerInfo[user].profit+(stakerInfo[user].balanceStaker*(profitPerToken-stakerInfo[user].userRewardPerToken))/1e18);
+    }
+
+    //other modifir
+    modifier checkBalance(uint amount){
+        require(stakerInfo[msg.sender].balanceStaker>=amount, "balance is not enough...");
         _;
     }
 
-    function getReward(uint amount) public checkRewardBalance(amount, msg.sender){
-        updateProfit(msg.sender);
-        staking[msg.sender].totalProfit -= amount;
-        staking[msg.sender].giveProfit += amount;
-        bool r = IERC20(tokenC).transfer(msg.sender,amount);
-        require(r, "the transfer faild");
+    modifier checkRewardBalance{
+        require(stakerInfo[msg.sender].profit>0, "you do not have any reward token...");
+        _;
     }
 
-    
+    function stake(uint amount) public updateReward(msg.sender) returns(bool){
+        if(stakerInfo[msg.sender].balanceStaker==0){
+            activeStakerCount++;
+        }
+        stakerInfo[msg.sender].balanceStaker += amount;
+        //already user should approve set for this.
+        bool res = IERC20(stakeToken).transferFrom(msg.sender, address(this), amount);
+        totalStakeToken += amount;
+        return res;
+    }
+
+    function withdrow(uint amount) public checkBalance(amount) updateReward(msg.sender) returns(bool){
+        stakerInfo[msg.sender].balanceStaker -= amount;
+        if(stakerInfo[msg.sender].balanceStaker==0){
+            activeStakerCount--;
+        }
+        bool res = IERC20(stakeToken).transfer(msg.sender, amount);
+        totalStakeToken -= amount;
+        return res;
+    }
+
+    function getReward() public checkRewardBalance updateReward(msg.sender) returns(bool){
+        bool res = IERC20(rewardToken).transfer(msg.sender, stakerInfo[msg.sender].profit);
+        stakerInfo[msg.sender].withrowProfit += stakerInfo[msg.sender].profit;
+        stakerInfo[msg.sender].profit=0;
+        return res;
+    }
+
+    function exit() public {
+        withdrow(stakerInfo[msg.sender].balanceStaker);
+        getReward();
+        totalStakeToken--;
+    }
+
+    function getRewardRemind() public view returns(uint){
+        return stakerInfo[msg.sender].profit;
+    }
+
+    function getAmountStaking() public view returns(uint){
+         return stakerInfo[msg.sender].balanceStaker;
+    }
+
+
 
 }
+
+
